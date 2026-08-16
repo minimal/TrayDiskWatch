@@ -1,0 +1,8 @@
+# Build output
+TrayDiskWatch.exe
+
+# Runtime log
+TrayDiskWatch.log
+
+# Editor swap files
+*.swp
