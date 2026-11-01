@@ -1,6 +1,6 @@
 # TrayDiskWatch
 
-A system tray icon for Windows that shows disk space at a glance. A coloured dot reflects free space on all fixed drives (the worst drive wins), with a dark wedge showing the used portion. Hover for per-drive free space; a toast notification fires when a drive drops into a worse tier.
+A system tray icon for Windows that shows disk space at a glance. A coloured dot reflects free space on all fixed drives (the worst drive wins), with a dark wedge showing the used portion. Hover for per-drive free space (the percent is dropped before any drive is, if the tooltip would overflow); a toast notification fires when a drive drops into a worse tier.
 
 ## Tiers
 

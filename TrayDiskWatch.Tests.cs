@@ -28,6 +28,7 @@ static partial class Program
         Console.WriteLine("TrayDiskWatch tests");
 
         TierBoundaries();
+        TierTableMatchesReadme();
         RawTierSelection();
         HysteresisHoldsImprovement();
         HysteresisHoldsDeterioration();
@@ -51,13 +52,40 @@ static partial class Program
         Console.WriteLine();
         Console.WriteLine("tier boundaries: the smaller of percent-of-drive and GB floor");
 
-        OkClose("100 GB, green boundary is 10% = 10 GB", TierBoundaryGB(100.0, 0), 10.0);
-        OkClose("100 GB, yellow boundary is 5% = 5 GB", TierBoundaryGB(100.0, 1), 5.0);
-        OkClose("100 GB, orange boundary is 2% = 2 GB", TierBoundaryGB(100.0, 2), 2.0);
-        OkClose("2 TB, green floor caps the percent at 10 GB", TierBoundaryGB(2048.0, 0), 10.0);
-        OkClose("2 TB, orange floor caps the percent at 2 GB", TierBoundaryGB(2048.0, 2), 2.0);
-        OkClose("20 GB, green boundary is percent-bound at 2 GB", TierBoundaryGB(20.0, 0), 2.0);
-        OkClose("20 GB, orange boundary is percent-bound at 0.4 GB", TierBoundaryGB(20.0, 2), 0.4);
+        OkClose("100 GB, green boundary is 10% = 10 GB", TierBoundaryGB(100.0, Tier.Green), 10.0);
+        OkClose("100 GB, yellow boundary is 5% = 5 GB", TierBoundaryGB(100.0, Tier.Yellow), 5.0);
+        OkClose("100 GB, orange boundary is 2% = 2 GB", TierBoundaryGB(100.0, Tier.Orange), 2.0);
+        OkClose("2 TB, green floor caps the percent at 10 GB", TierBoundaryGB(2048.0, Tier.Green), 10.0);
+        OkClose("2 TB, orange floor caps the percent at 2 GB", TierBoundaryGB(2048.0, Tier.Orange), 2.0);
+        OkClose("20 GB, green boundary is percent-bound at 2 GB", TierBoundaryGB(20.0, Tier.Green), 2.0);
+        OkClose("20 GB, orange boundary is percent-bound at 0.4 GB", TierBoundaryGB(20.0, Tier.Orange), 0.4);
+    }
+
+    static void TierTableMatchesReadme()
+    {
+        Console.WriteLine();
+        Console.WriteLine("the tier table still matches the README");
+
+        Ok("four tiers, green first and red last",
+           TierTable.Length == 4
+           && TierTable[0].Tier == Tier.Green
+           && TierTable[3].Tier == Tier.Red);
+
+        OkClose("green wants 10% free", TierTable[0].MinPercentFree, 10.0);
+        OkClose("green floor is 10 GB", TierTable[0].MinGBFree, 10.0);
+        OkClose("yellow wants 5% free", TierTable[1].MinPercentFree, 5.0);
+        OkClose("yellow floor is 5 GB", TierTable[1].MinGBFree, 5.0);
+        OkClose("orange wants 2% free", TierTable[2].MinPercentFree, 2.0);
+        OkClose("orange floor is 2 GB", TierTable[2].MinGBFree, 2.0);
+
+        Ok("every tier has its own colour",
+           TierTable[0].Rgb != TierTable[1].Rgb
+           && TierTable[1].Rgb != TierTable[2].Rgb
+           && TierTable[2].Rgb != TierTable[3].Rgb);
+        Ok("only red is critical", Info(Tier.Red).AlertTitle.Contains("CRITICAL"));
+        Ok("orange warns", Info(Tier.Orange).AlertTitle.Contains("Warning"));
+        Ok("an unknown tier falls back to red, not green",
+           Info(Tier.Unknown).Tier == Tier.Red);
     }
 
     static void RawTierSelection()
@@ -84,9 +112,9 @@ static partial class Program
         Console.WriteLine("hysteresis holds an improvement until the margin is cleared");
 
         OkEqual("red at 2.3 GB free, only 0.3 over the orange boundary, stays red",
-                (int)ApplyHysteresis(RawTier(2.3, 100.0), 3, 2.3, 100.0), 3);
+                (int)ApplyHysteresis(RawTier(2.3, 100.0), Tier.Red, 2.3, 100.0), 3);
         OkEqual("red at 2.6 GB free has cleared the margin, so it is orange",
-                (int)ApplyHysteresis(RawTier(2.6, 100.0), 3, 2.6, 100.0), 2);
+                (int)ApplyHysteresis(RawTier(2.6, 100.0), Tier.Red, 2.6, 100.0), 2);
     }
 
     static void HysteresisHoldsDeterioration()
@@ -95,9 +123,9 @@ static partial class Program
         Console.WriteLine("hysteresis holds a deterioration until the margin is crossed");
 
         OkEqual("yellow at 4.6 GB free, only 0.4 under the boundary, stays yellow",
-                (int)ApplyHysteresis(RawTier(4.6, 100.0), 1, 4.6, 100.0), 1);
+                (int)ApplyHysteresis(RawTier(4.6, 100.0), Tier.Yellow, 4.6, 100.0), 1);
         OkEqual("yellow at 4.4 GB free has crossed the margin, so it is orange",
-                (int)ApplyHysteresis(RawTier(4.4, 100.0), 1, 4.4, 100.0), 2);
+                (int)ApplyHysteresis(RawTier(4.4, 100.0), Tier.Yellow, 4.4, 100.0), 2);
     }
 
     static void HysteresisSkipsFirstLook()
@@ -106,9 +134,9 @@ static partial class Program
         Console.WriteLine("hysteresis does not hold anything on the first look");
 
         OkEqual("unknown previous tier passes the raw tier straight through",
-                (int)ApplyHysteresis(2, -1, 3.0, 100.0), 2);
+                (int)ApplyHysteresis(RawTier(3.0, 100.0), Tier.Unknown, 3.0, 100.0), 2);
         OkEqual("unknown previous tier passes red straight through",
-                (int)ApplyHysteresis(3, -1, 1.0, 100.0), 3);
+                (int)ApplyHysteresis(RawTier(1.0, 100.0), Tier.Unknown, 1.0, 100.0), 3);
     }
 
     static void WorstDriveDrivesColourAndWedge()
@@ -126,10 +154,10 @@ static partial class Program
         OkEqual("the small drive is orange", (int)small.Tier, 2);
 
         double worstPct;
-        int worstTier;
+        Tier worstTier;
         ReduceWorst(new List<Drive> { big, small }, out worstPct, out worstTier);
 
-        OkEqual("the dot takes the colour of the orange drive", worstTier, 2);
+        OkEqual("the dot takes the colour of the orange drive", (int)worstTier, 2);
         OkClose("the wedge takes the used portion of that same drive", worstPct, small.FreePct);
     }
 
@@ -138,14 +166,14 @@ static partial class Program
         Console.WriteLine();
         Console.WriteLine("the toast describes the tier being entered");
 
-        OkText("red is critical", AlertTitle(3), "CRITICAL: disk space");
-        OkText("orange is a warning", AlertTitle(2), "Warning: disk space");
+        OkText("red is critical", AlertTitle(Tier.Red), "CRITICAL: disk space");
+        OkText("orange is a warning", AlertTitle(Tier.Orange), "Warning: disk space");
         OkEqual("orange to red is worded for red",
-                (int)AlertTierAfterTransition(2, 3), 3);
+                (int)AlertTierAfterTransition(Tier.Orange, Tier.Red), 3);
         OkEqual("green to orange is worded for orange",
-                (int)AlertTierAfterTransition(0, 2), 2);
+                (int)AlertTierAfterTransition(Tier.Green, Tier.Orange), 2);
         OkEqual("a first look that finds red is worded for red",
-                (int)AlertTierAfterTransition(-1, 3), 3);
+                (int)AlertTierAfterTransition(Tier.Unknown, Tier.Red), 3);
     }
 
     static void TooltipKeepsEveryDrive()
@@ -153,15 +181,15 @@ static partial class Program
         Console.WriteLine();
         Console.WriteLine("the tooltip reports every drive inside the 63-char limit");
 
-        string one = BuildTooltipText(new List<Drive> { MakeDrive("C:", 123.4, 1000.0, 0) });
+        string one = BuildTooltipText(new List<Drive> { MakeDrive("C:", 123.4, 1000.0, Tier.Green) });
         Ok("a lone drive shows free space and percent", one.Contains("(12.3%)"));
 
         var four = new List<Drive>
         {
-            MakeDrive("C:", 1234.5, 9999.0, 0),
-            MakeDrive("D:", 1234.5, 9999.0, 0),
-            MakeDrive("F:", 1234.5, 9999.0, 0),
-            MakeDrive("O:", 1234.5, 9999.0, 0),
+            MakeDrive("C:", 1234.5, 9999.0, Tier.Green),
+            MakeDrive("D:", 1234.5, 9999.0, Tier.Green),
+            MakeDrive("F:", 1234.5, 9999.0, Tier.Green),
+            MakeDrive("O:", 1234.5, 9999.0, Tier.Green),
         };
         string text = BuildTooltipText(four);
 
@@ -173,7 +201,7 @@ static partial class Program
         // mismatching the limit is not.
         var many = new List<Drive>();
         for (int i = 0; i < 12; i++)
-            many.Add(MakeDrive(((char)('C' + i)).ToString() + ":", 1234.5, 9999.0, 0));
+            many.Add(MakeDrive(((char)('C' + i)).ToString() + ":", 1234.5, 9999.0, Tier.Green));
         Ok("even twelve drives stay inside the 63-char limit",
            BuildTooltipText(many).Length <= TooltipMaxLength);
     }
@@ -192,7 +220,7 @@ static partial class Program
 
     // ---------------- harness ----------------
 
-    static Drive MakeDrive(string letter, double freeGB, double totalGB, int tier)
+    static Drive MakeDrive(string letter, double freeGB, double totalGB, Tier tier)
     {
         var d = new Drive();
         d.Letter = letter;
