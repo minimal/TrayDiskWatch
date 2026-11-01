@@ -35,7 +35,7 @@ using Microsoft.Win32;
 using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
 
-static class Program
+static partial class Program
 {
     // ---- CONFIG ----
     static readonly int    RefreshSeconds = 30;
@@ -87,6 +87,7 @@ static class Program
     [DllImport("user32.dll")]
     static extern bool DestroyIcon(IntPtr handle);
 
+#if !TESTS
     [STAThread]
     static void Main()
     {
@@ -119,6 +120,7 @@ static class Program
             Application.Run();
         }
     }
+#endif
 
     static ContextMenuStrip BuildMenu()
     {
@@ -161,6 +163,38 @@ static class Program
         }
     }
 
+    static int RawTier(double freeGB, double totalGB)
+    {
+        // tier the drive is in right now, before hysteresis
+        if (freeGB >= TierBoundaryGB(totalGB, 0)) return 0;
+        if (freeGB >= TierBoundaryGB(totalGB, 1)) return 1;
+        if (freeGB >= TierBoundaryGB(totalGB, 2)) return 2;
+        return 3;
+    }
+
+    static int ApplyHysteresis(int rawTier, int previousTier, double freeGB, double totalGB)
+    {
+        // a tier change needs HysteresisGB of margin beyond the boundary, so a
+        // drive hovering near one can't flap and re-alert constantly
+        if (previousTier < 0) return rawTier;           // no history: nothing to hold
+        if (rawTier < previousTier && freeGB < TierBoundaryGB(totalGB, rawTier) + HysteresisGB)
+            return previousTier;                        // improvement not big enough yet
+        if (rawTier > previousTier && freeGB >= TierBoundaryGB(totalGB, previousTier) - HysteresisGB)
+            return previousTier;                        // drop not deep enough yet
+        return rawTier;
+    }
+
+    static void ReduceWorst(List<Drive> all, out double worstFreePct, out int worstTier)
+    {
+        worstFreePct = 100.0;
+        worstTier = 0;
+        foreach (var d in all)
+        {
+            if (d.FreePct < worstFreePct) worstFreePct = d.FreePct;
+            if (d.Tier > worstTier) worstTier = d.Tier;
+        }
+    }
+
     static void DoRefresh()
     {
         // Re-enumerate drive letters (cheap) but PRESERVE Drive objects (and their
@@ -191,8 +225,6 @@ static class Program
         catch { }
         if (fresh.Count > 0) drives = fresh;
 
-        double worst = 100.0;
-        int worstTier = 0;
         foreach (var drv in drives)
         {
             ulong free, total, avail;
@@ -203,30 +235,17 @@ static class Program
 
             double freeGB = drv.Free / 1073741824.0;
             double totalGB = drv.Total / 1073741824.0;
-            int rawTier = freeGB >= TierBoundaryGB(totalGB, 0) ? 0
-                        : freeGB >= TierBoundaryGB(totalGB, 1) ? 1
-                        : freeGB >= TierBoundaryGB(totalGB, 2) ? 2 : 3;
-
-            // hysteresis: a tier change needs a margin beyond the boundary, so a
-            // drive hovering near a boundary can't flap and re-alert constantly
-            int newTier = rawTier;
-            if (drv.Tier >= 0)
-            {
-                if (rawTier < drv.Tier && freeGB < TierBoundaryGB(totalGB, rawTier) + HysteresisGB)
-                    newTier = drv.Tier;                     // improvement not big enough yet
-                else if (rawTier > drv.Tier && freeGB >= TierBoundaryGB(totalGB, drv.Tier) - HysteresisGB)
-                    newTier = drv.Tier;                     // drop not deep enough yet
-            }
+            int newTier = ApplyHysteresis(RawTier(freeGB, totalGB), drv.Tier, freeGB, totalGB);
 
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             if (drv.Tier == -1)
             {
                 // first look: only shout if already critical
-                if (newTier == 3) { Alert(drv, 3, false); drv.LastRedAlert = now; }
+                if (newTier == 3) { Alert(drv, drv.Tier, newTier, false); drv.LastRedAlert = now; }
             }
             else if (newTier > drv.Tier)
             {
-                Alert(drv, drv.Tier, false);        // got worse -> notify once per tier
+                Alert(drv, drv.Tier, newTier, false);   // got worse -> notify once per tier
                 if (newTier == 3) drv.LastRedAlert = now;
             }
             else if (newTier == 3 && drv.Tier == 3)
@@ -234,7 +253,7 @@ static class Program
                 // still red: re-alert every RedRepeatMinutes
                 if (now - drv.LastRedAlert >= RedRepeatMinutes * 60)
                 {
-                    Alert(drv, 3, true);
+                    Alert(drv, drv.Tier, newTier, true);
                     drv.LastRedAlert = now;
                 }
             }
@@ -245,11 +264,11 @@ static class Program
                 try { ToastNotificationManager.History.Remove(drv.Letter, ToastGroup, Aumid); } catch { }
             }
             drv.Tier = newTier;
-
-            if (drv.FreePct < worst) worst = drv.FreePct;
-            if (newTier > worstTier) worstTier = newTier;
         }
 
+        double worst;
+        int worstTier;
+        ReduceWorst(drives, out worst, out worstTier);
         UpdateIcon(worst, worstTier);
         currentWorst = worst;
         currentWorstTier = worstTier;
@@ -284,14 +303,27 @@ static class Program
         catch (Exception ex) { Log("AUMID registration failed: " + ex.Message); }
     }
 
-    static void Alert(Drive d, int oldTier, bool repeat)
+    static string AlertTitle(int tier)
     {
-        string title = oldTier == 3 ? "CRITICAL: disk space - " + d.Letter
-                     : oldTier == 2 ? "Warning: disk space - " + d.Letter
-                     :                "Low disk space - " + d.Letter;
+        return tier == 3 ? "CRITICAL: disk space"
+             : tier == 2 ? "Warning: disk space"
+             :             "Low disk space";
+    }
+
+    static int AlertTierAfterTransition(int previousTier, int newTier)
+    {
+        // which tier the alert text is worded for
+        if (previousTier < 0) return newTier;           // no history: describe what we found
+        return previousTier;
+    }
+
+    static void Alert(Drive d, int previousTier, int newTier, bool repeat)
+    {
+        int titleTier = AlertTierAfterTransition(previousTier, newTier);
+        string title = AlertTitle(titleTier) + " - " + d.Letter;
         string text = string.Format("{0} {1:F1} GB free ({2:F1}%). Free up space before you can't save files!",
             d.Letter, d.Free / 1073741824.0, d.FreePct);
-        Log((repeat ? "REPEAT ALERT" : "ALERT") + " tier " + oldTier + " - " + d.Letter + " " + text);
+        Log((repeat ? "REPEAT ALERT" : "ALERT") + " tier " + titleTier + " - " + d.Letter + " " + text);
         try
         {
             // Windows toast: pops briefly, then persists in the notification
@@ -317,6 +349,16 @@ static class Program
         }
     }
 
+    const double WedgeMinimumFraction = 0.02;   // below this the wedge is a hairline: skip it
+
+    static double UsedFraction(double freePct)
+    {
+        double used = 1.0 - freePct / 100.0;
+        if (used < 0.0) return 0.0;
+        if (used > 1.0) return 1.0;
+        return used;
+    }
+
     static void UpdateIcon(double worstFreePct, int worstTier)
     {
         // Blink when critical: alternate with a grey dot
@@ -336,10 +378,8 @@ static class Program
                 using (var b = new SolidBrush(c)) g.FillEllipse(b, 1, 1, 14, 14);
 
                 // dark wedge = used portion (colored remainder = free)
-                double used = 1.0 - worstFreePct / 100.0;
-                if (used < 0.0) used = 0.0;
-                if (used > 1.0) used = 1.0;
-                if (used > 0.02)
+                double used = UsedFraction(worstFreePct);
+                if (used > WedgeMinimumFraction)
                 {
                     using (var b2 = new SolidBrush(Color.FromArgb(190, 0, 0, 0)))
                         g.FillPie(b2, 1, 1, 14, 14, -90, (float)(360.0 * used));
@@ -358,18 +398,25 @@ static class Program
         }
     }
 
-    static void UpdateTooltip()
+    const int TooltipMaxLength = 63;    // NotifyIcon's limit
+
+    static string BuildTooltipText(List<Drive> all)
     {
         // Keep under NotifyIcon's 63-char limit: percent-only, space-separated
         var sb = new StringBuilder();
-        foreach (var d in drives)
+        foreach (var d in all)
         {
             if (sb.Length > 0) sb.Append(" ");
             sb.AppendFormat("{0}{1:F1}G({2:F1}%)", d.Letter, d.Free / 1073741824.0, d.FreePct);
         }
         string text = sb.ToString();
-        if (text.Length > 63) text = text.Substring(0, 60) + "...";
+        if (text.Length > TooltipMaxLength) text = text.Substring(0, TooltipMaxLength - 3) + "...";
+        return text;
+    }
+
+    static void UpdateTooltip()
+    {
         ni.Text = "";                                // force refresh even if text is unchanged
-        ni.Text = text;
+        ni.Text = BuildTooltipText(drives);
     }
 }

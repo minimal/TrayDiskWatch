@@ -23,6 +23,14 @@ csc /nologo /target:winexe /win32icon:icon.ico /out:TrayDiskWatch.exe /r:System.
 
 Requires the Windows SDK for toast support (`Windows.winmd`, referenced in `build.bat`).
 
+## Test
+
+```
+test.bat
+```
+
+Compiles `TrayDiskWatch.cs` together with `TrayDiskWatch.Tests.cs` under `/define:TESTS` (which swaps the tray entry point for the test runner), runs the suite, and exits non-zero if any check fails. Plain `csc`, no test framework: the checks cover the tier boundaries, the hysteresis margin, which drive the icon describes, the alert wording, and the tooltip layout. The shipped build is unaffected — `TrayDiskWatch.cs` on its own is still the whole program.
+
 ## Run
 
 Launch `TrayDiskWatch.exe`. It stays in the tray; right-click for menu (refresh, open C:, storage settings, exit). Logs to `TrayDiskWatch.log` next to the exe.

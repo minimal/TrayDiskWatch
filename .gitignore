@@ -1,5 +1,6 @@
 # Build output
 TrayDiskWatch.exe
+TrayDiskWatch.Tests.exe
 
 # Runtime log
 TrayDiskWatch.log
