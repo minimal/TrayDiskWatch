@@ -413,9 +413,9 @@ static partial class Program
     // blob: the colour - the whole point of the icon - was gone exactly when it
     // mattered. Painting the *free* part as a pale tint instead keeps the tier
     // colour on screen at every fill level and on both taskbar themes.
-    const int    IconSize            = 16;
-    const int    IconFrameWidth      = 2;                                 // dark border around the fill
-    const int    IconInner           = IconSize - 2 * IconFrameWidth;     // 12px of fill
+    const int    IconSize            = 24;                                // Windows 11 draws tray icons at 24px at 100% scaling
+    const int    IconFrameWidth      = IconSize / 12;                    // 2px dark border around the fill
+    const int    IconInner           = IconSize - 2 * IconFrameWidth;     // 18px of fill
     const double FreeTint            = 0.45;                              // free band: tier colour mixed toward white
     const double BandMinimumFraction = 0.02;                              // a thinner used band is a hairline: skip it
     static readonly Color IconFrame  = Color.FromArgb(12, 12, 14);
@@ -453,8 +453,9 @@ static partial class Program
         var bmp = new Bitmap(IconSize, IconSize);
         using (var g = Graphics.FromImage(bmp))
         {
-            g.SmoothingMode = SmoothingMode.None;   // crisp pixels: 16px leaves no room for blur
+            g.SmoothingMode = SmoothingMode.None;   // crisp pixels: a tray icon has no room for blur
 
+            using (var b = new SolidBrush(IconFrame)) g.FillRectangle(b, 0, 0, IconSize, IconSize);
             using (var b = new SolidBrush(Tint(c, FreeTint)))
                 g.FillRectangle(b, IconFrameWidth, IconFrameWidth, IconInner, IconInner);
 
@@ -462,12 +463,6 @@ static partial class Program
             if (used > 0)
                 using (var b = new SolidBrush(c))
                     g.FillRectangle(b, IconFrameWidth, IconFrameWidth + IconInner - used, IconInner, used);
-
-            using (var p = new Pen(IconFrame))
-            {
-                g.DrawRectangle(p, 0, 0, IconSize - 1, IconSize - 1);
-                g.DrawRectangle(p, 1, 1, IconSize - 3, IconSize - 3);
-            }
         }
         return bmp;
     }

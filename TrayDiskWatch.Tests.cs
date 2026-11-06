@@ -40,6 +40,7 @@ static partial class Program
         TooltipKeepsEveryDrive();
         UsedFractionClamps();
         UsedPixelsTracksFill();
+        IconMatchesTraySize();
         IconKeepsTierColourWhenNearlyFull();
         IconBlinkFrameIsGrey();
 
@@ -236,6 +237,27 @@ static partial class Program
         OkEqual("99.9% free draws no band, so no hairline", UsedPixels(99.9, IconInner), 0);
     }
 
+    static void IconMatchesTraySize()
+    {
+        Console.WriteLine();
+        Console.WriteLine("the icon is drawn at the size the tray asks for");
+
+        // Windows 11's notification area draws 24px icons at 100% scaling. A 16px
+        // bitmap gets upscaled 1.5x, which smears the frame and the fill edge -
+        // that is why the icon looked soft in the tray.
+        OkEqual("the icon is 24px square", IconSize, 24);
+        OkEqual("the frame scales with it", IconFrameWidth, 2);
+
+        using (var bmp = RenderIcon(50.0, Tier.Green, false))
+        {
+            OkEqual("the canvas matches IconSize", bmp.Width, IconSize);
+            OkText("the corner is the dark frame", HexAt(bmp, 0, 0), Hex(IconFrame));
+            OkText("the first inner row is the free band",
+                   HexAt(bmp, IconSize / 2, IconFrameWidth),
+                   Hex(Tint(TierColor(Info(Tier.Green).Rgb), FreeTint)));
+        }
+    }
+
     static void IconKeepsTierColourWhenNearlyFull()
     {
         Console.WriteLine();
@@ -248,23 +270,24 @@ static partial class Program
         {
             using (var bmp = RenderIcon(pct, Tier.Red, false))
                 OkText(pct + "% free: the used area is the tier colour",
-                       HexAt(bmp, 8, 12), Hex(TierColor(Info(Tier.Red).Rgb)));
+                       HexAt(bmp, IconSize / 2, UsedRow()), Hex(TierColor(Info(Tier.Red).Rgb)));
         }
 
         foreach (var info in TierTable)
         {
             using (var bmp = RenderIcon(0.5, info.Tier, false))
                 OkText("a nearly full " + info.Tier + " drive stays " + info.Tier,
-                       HexAt(bmp, 8, 12), Hex(TierColor(info.Rgb)));
+                       HexAt(bmp, IconSize / 2, UsedRow()), Hex(TierColor(info.Rgb)));
         }
 
         // with room to spare the square shows both bands, pale free above full-strength used
         using (var roomy = RenderIcon(20.0, Tier.Red, false))
         {
             OkText("20% free paints the free band as a pale tint",
-                   HexAt(roomy, 8, 2), Hex(Tint(TierColor(Info(Tier.Red).Rgb), FreeTint)));
+                   HexAt(roomy, IconSize / 2, IconFrameWidth),
+                   Hex(Tint(TierColor(Info(Tier.Red).Rgb), FreeTint)));
             Ok("the free band and the used band differ",
-               HexAt(roomy, 8, 2) != HexAt(roomy, 8, 12));
+               HexAt(roomy, IconSize / 2, IconFrameWidth) != HexAt(roomy, IconSize / 2, UsedRow()));
         }
     }
 
@@ -274,12 +297,19 @@ static partial class Program
         Console.WriteLine("the blink frame alternates to grey");
 
         using (var bmp = RenderIcon(0.5, Tier.Red, true))
-            OkText("the blinking used area is grey", HexAt(bmp, 8, 12), Hex(BlinkGrey));
+            OkText("the blinking used area is grey", HexAt(bmp, IconSize / 2, UsedRow()), Hex(BlinkGrey));
         using (var bmp = RenderIcon(0.5, Tier.Red, false))
-            Ok("the same icon is red when not blinking", HexAt(bmp, 8, 12) != Hex(BlinkGrey));
+            Ok("the same icon is red when not blinking",
+               HexAt(bmp, IconSize / 2, UsedRow()) != Hex(BlinkGrey));
     }
 
     // ---------------- harness ----------------
+
+    static int UsedRow()
+    {
+        // last row of fill: inside the square, whatever the icon size is
+        return IconSize - IconFrameWidth - 1;
+    }
 
     static string Hex(Color c)
     {
