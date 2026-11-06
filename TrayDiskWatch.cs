@@ -1,7 +1,11 @@
 // TrayDiskWatch - live disk-space tray gauge for Windows
 //
-// Shows a colored dot in the system tray that reflects free space on all
-// fixed drives (the WORST drive wins), with a dark wedge = used space.
+// Shows a coloured square in the system tray that reflects free space on all
+// fixed drives (the WORST drive wins). Used space fills the square from the
+// bottom in the tier colour at full strength; free space is the same hue tinted
+// pale; a dark frame holds the shape on a light taskbar. A nearly full drive is
+// therefore a solid block of its tier colour, which is the state that must not
+// be missed.
 //   green  >= WarnYellow % free (big drives: >= WarnGreenGB  free)
 //   yellow >= WarnOrange % free (big drives: >= WarnYellowGB free)
 //   orange >= WarnRed    % free (big drives: >= WarnOrangeGB free)
@@ -60,7 +64,7 @@ static partial class Program
         public readonly Tier   Tier;
         public readonly double MinPercentFree;   // percent of the drive that must be free
         public readonly double MinGBFree;        // absolute floor; the SMALLER of the two wins
-        public readonly int    Rgb;              // dot colour
+        public readonly int    Rgb;              // tier colour
         public readonly string AlertTitle;       // toast headline
 
         public TierInfo(Tier tier, double minPercentFree, double minGBFree, int rgb, string alertTitle)
@@ -227,8 +231,8 @@ static partial class Program
 
     static void ReduceWorst(List<Drive> all, out double worstFreePct, out Tier worstTier)
     {
-        // ONE drive decides both the dot colour and the wedge, so the two can
-        // never describe different drives. Worst tier wins; ties go to whichever
+        // ONE drive decides both the tier colour and the fill level, so the two
+        // can never describe different drives. Worst tier wins; ties go to whichever
         // of those has the least free space.
         Drive worst = null;
         foreach (var d in all)
@@ -402,7 +406,20 @@ static partial class Program
         return Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     }
 
-    const double WedgeMinimumFraction = 0.02;   // below this the wedge is a hairline: skip it
+    // ---- ICON ----
+    // Used space is painted in the tier colour at FULL strength, so the worst a
+    // drive can be is a solid block of that colour. The previous design covered
+    // the dot with a 75%-opaque dark wedge, which at 0.5% free left a near-black
+    // blob: the colour - the whole point of the icon - was gone exactly when it
+    // mattered. Painting the *free* part as a pale tint instead keeps the tier
+    // colour on screen at every fill level and on both taskbar themes.
+    const int    IconSize            = 16;
+    const int    IconFrameWidth      = 2;                                 // dark border around the fill
+    const int    IconInner           = IconSize - 2 * IconFrameWidth;     // 12px of fill
+    const double FreeTint            = 0.45;                              // free band: tier colour mixed toward white
+    const double BandMinimumFraction = 0.02;                              // a thinner used band is a hairline: skip it
+    static readonly Color IconFrame  = Color.FromArgb(12, 12, 14);
+    static readonly Color BlinkGrey  = Color.FromArgb(170, 170, 170);
 
     static double UsedFraction(double freePct)
     {
@@ -412,32 +429,56 @@ static partial class Program
         return used;
     }
 
+    static int UsedPixels(double freePct, int height)
+    {
+        // rows of used space in a square `height` rows tall
+        double used = UsedFraction(freePct);
+        if (used < BandMinimumFraction) return 0;    // hairline, not information
+        int px = (int)(used * height + 0.5);
+        return px > height ? height : px;
+    }
+
+    static Color Tint(Color c, double towardWhite)
+    {
+        return Color.FromArgb(
+            (int)(c.R + (255 - c.R) * towardWhite),
+            (int)(c.G + (255 - c.G) * towardWhite),
+            (int)(c.B + (255 - c.B) * towardWhite));
+    }
+
+    static Bitmap RenderIcon(double worstFreePct, Tier worstTier, bool blink)
+    {
+        // pure: no NotifyIcon, no timer, so a test can read the pixels back
+        Color c = blink ? BlinkGrey : TierColor(Info(worstTier).Rgb);
+        var bmp = new Bitmap(IconSize, IconSize);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.None;   // crisp pixels: 16px leaves no room for blur
+
+            using (var b = new SolidBrush(Tint(c, FreeTint)))
+                g.FillRectangle(b, IconFrameWidth, IconFrameWidth, IconInner, IconInner);
+
+            int used = UsedPixels(worstFreePct, IconInner);
+            if (used > 0)
+                using (var b = new SolidBrush(c))
+                    g.FillRectangle(b, IconFrameWidth, IconFrameWidth + IconInner - used, IconInner, used);
+
+            using (var p = new Pen(IconFrame))
+            {
+                g.DrawRectangle(p, 0, 0, IconSize - 1, IconSize - 1);
+                g.DrawRectangle(p, 1, 1, IconSize - 3, IconSize - 3);
+            }
+        }
+        return bmp;
+    }
+
     static void UpdateIcon(double worstFreePct, Tier worstTier)
     {
-        // Blink when critical: alternate with a grey dot
+        // Blink when critical: alternate with a grey square
         bool blink = worstTier == Tier.Red && ((Environment.TickCount / 500) % 2 == 0);
 
-        using (var bmp = new Bitmap(16, 16))
+        using (var bmp = RenderIcon(worstFreePct, worstTier, blink))
         {
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                Color c = TierColor(Info(worstTier).Rgb);
-                if (blink) c = Color.FromArgb(170, 170, 170);
-
-                using (var b = new SolidBrush(c)) g.FillEllipse(b, 1, 1, 14, 14);
-
-                // dark wedge = used portion (colored remainder = free)
-                double used = UsedFraction(worstFreePct);
-                if (used > WedgeMinimumFraction)
-                {
-                    using (var b2 = new SolidBrush(Color.FromArgb(190, 0, 0, 0)))
-                        g.FillPie(b2, 1, 1, 14, 14, -90, (float)(360.0 * used));
-                }
-
-                using (var p = new Pen(Color.FromArgb(80, 0, 0, 0))) g.DrawEllipse(p, 1, 1, 14, 14);
-            }
-
             IntPtr h = bmp.GetHicon();
             var icon = Icon.FromHandle(h);
             if (currentIcon != null) currentIcon.Dispose();

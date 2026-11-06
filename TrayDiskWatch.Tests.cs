@@ -9,12 +9,14 @@
 //
 // Everything under test here is pure (no WinForms, no WinRT, no disks): the
 // tier boundaries, the hysteresis, which drive the icon describes, the toast
-// wording, and the tooltip layout. That is also why those pieces are split out
-// of DoRefresh/UpdateIcon/UpdateTooltip into named functions.
+// wording, the tooltip layout, and the pixels RenderIcon paints. That is also
+// why those pieces are split out of DoRefresh/UpdateIcon/UpdateTooltip into
+// named functions.
 
 #if TESTS
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 
 static partial class Program
 {
@@ -33,10 +35,13 @@ static partial class Program
         HysteresisHoldsImprovement();
         HysteresisHoldsDeterioration();
         HysteresisSkipsFirstLook();
-        WorstDriveDrivesColourAndWedge();
+        WorstDriveDrivesColourAndFill();
         AlertWordsTheTierBeingEntered();
         TooltipKeepsEveryDrive();
         UsedFractionClamps();
+        UsedPixelsTracksFill();
+        IconKeepsTierColourWhenNearlyFull();
+        IconBlinkFrameIsGrey();
 
         Console.WriteLine();
         Console.WriteLine(failures == 0
@@ -139,10 +144,10 @@ static partial class Program
                 (int)ApplyHysteresis(RawTier(1.0, 100.0), Tier.Unknown, 1.0, 100.0), 3);
     }
 
-    static void WorstDriveDrivesColourAndWedge()
+    static void WorstDriveDrivesColourAndFill()
     {
         Console.WriteLine();
-        Console.WriteLine("the icon's colour and its wedge must describe the same drive");
+        Console.WriteLine("the icon's colour and its fill must describe the same drive");
 
         // The big drive is rescued by the GB floor (11 GB free reads green) but
         // has the lowest free PERCENT. The small drive is orange. So the lowest
@@ -157,8 +162,8 @@ static partial class Program
         Tier worstTier;
         ReduceWorst(new List<Drive> { big, small }, out worstPct, out worstTier);
 
-        OkEqual("the dot takes the colour of the orange drive", (int)worstTier, 2);
-        OkClose("the wedge takes the used portion of that same drive", worstPct, small.FreePct);
+        OkEqual("the icon takes the colour of the orange drive", (int)worstTier, 2);
+        OkClose("the fill takes the used portion of that same drive", worstPct, small.FreePct);
     }
 
     static void AlertWordsTheTierBeingEntered()
@@ -209,16 +214,82 @@ static partial class Program
     static void UsedFractionClamps()
     {
         Console.WriteLine();
-        Console.WriteLine("the used fraction that drives the wedge");
+        Console.WriteLine("the used fraction that drives the filled band");
 
         OkClose("40% free is 60% used", UsedFraction(40.0), 0.6);
         OkClose("150% free clamps to 0% used", UsedFraction(150.0), 0.0);
         OkClose("negative free clamps to 100% used", UsedFraction(-25.0), 1.0);
-        Ok("a nearly-empty drive draws no wedge, deliberate so it is not a hairline",
-           UsedFraction(99.9) < WedgeMinimumFraction);
+        Ok("a nearly-empty drive draws no filled band, deliberate so it is not a hairline",
+           UsedFraction(99.9) < BandMinimumFraction);
+    }
+
+    static void UsedPixelsTracksFill()
+    {
+        Console.WriteLine();
+        Console.WriteLine("the filled rows of the square track used space");
+
+        OkEqual("100% free fills no rows", UsedPixels(100.0, IconInner), 0);
+        OkEqual("50% free fills half the square", UsedPixels(50.0, IconInner), IconInner / 2);
+        OkEqual("0% free fills every row", UsedPixels(0.0, IconInner), IconInner);
+        OkEqual("0.5% free still fills every row - the shape of the user's C:",
+                UsedPixels(0.5, IconInner), IconInner);
+        OkEqual("99.9% free draws no band, so no hairline", UsedPixels(99.9, IconInner), 0);
+    }
+
+    static void IconKeepsTierColourWhenNearlyFull()
+    {
+        Console.WriteLine();
+        Console.WriteLine("the icon stays in its tier colour however full the drive is");
+
+        // Regression: the old dark-wedge design left a near-black blob at high
+        // fill, so a critical drive was the least legible state of all.
+        int[] fills = { 0, 1, 5, 20 };
+        foreach (int pct in fills)
+        {
+            using (var bmp = RenderIcon(pct, Tier.Red, false))
+                OkText(pct + "% free: the used area is the tier colour",
+                       HexAt(bmp, 8, 12), Hex(TierColor(Info(Tier.Red).Rgb)));
+        }
+
+        foreach (var info in TierTable)
+        {
+            using (var bmp = RenderIcon(0.5, info.Tier, false))
+                OkText("a nearly full " + info.Tier + " drive stays " + info.Tier,
+                       HexAt(bmp, 8, 12), Hex(TierColor(info.Rgb)));
+        }
+
+        // with room to spare the square shows both bands, pale free above full-strength used
+        using (var roomy = RenderIcon(20.0, Tier.Red, false))
+        {
+            OkText("20% free paints the free band as a pale tint",
+                   HexAt(roomy, 8, 2), Hex(Tint(TierColor(Info(Tier.Red).Rgb), FreeTint)));
+            Ok("the free band and the used band differ",
+               HexAt(roomy, 8, 2) != HexAt(roomy, 8, 12));
+        }
+    }
+
+    static void IconBlinkFrameIsGrey()
+    {
+        Console.WriteLine();
+        Console.WriteLine("the blink frame alternates to grey");
+
+        using (var bmp = RenderIcon(0.5, Tier.Red, true))
+            OkText("the blinking used area is grey", HexAt(bmp, 8, 12), Hex(BlinkGrey));
+        using (var bmp = RenderIcon(0.5, Tier.Red, false))
+            Ok("the same icon is red when not blinking", HexAt(bmp, 8, 12) != Hex(BlinkGrey));
     }
 
     // ---------------- harness ----------------
+
+    static string Hex(Color c)
+    {
+        return c.R.ToString("X2") + c.G.ToString("X2") + c.B.ToString("X2");
+    }
+
+    static string HexAt(Bitmap bmp, int x, int y)
+    {
+        return Hex(bmp.GetPixel(x, y));
+    }
 
     static Drive MakeDrive(string letter, double freeGB, double totalGB, Tier tier)
     {

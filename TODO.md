@@ -8,9 +8,9 @@ enough detail to act on without re-reading the review. Current as of commit
 
 | | |
 |---|---|
-| App | `TrayDiskWatch.cs`, 495 lines, single file, no dependencies |
-| Tests | `TrayDiskWatch.Tests.cs`, 259 lines, framework-free, 53 checks, all green |
-| Run tests | `test.bat` — exits 0, prints `PASS  53 checks` |
+| App | `TrayDiskWatch.cs`, 536 lines, single file, no dependencies |
+| Tests | `TrayDiskWatch.Tests.cs`, 330 lines, framework-free, 70 checks, all green |
+| Run tests | `test.bat` — exits 0, prints `PASS  70 checks` |
 | Build app | `build.bat` (or the `csc` line in README, which is **wrong** — see item 11) |
 | Compiler | `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`, **C# 5 only** |
 
@@ -20,6 +20,10 @@ Already done, do not redo:
   `AlertTitle`, `AlertTierAfterTransition`, `BuildTooltipText`, `UsedFraction`)
 - `3ca6fed` `enum Tier` + one `TierTable` (boundary, colour, toast headline);
   `ReduceWorst` picks one winning drive so colour and wedge cannot disagree
+- icon is a square, not a dot: used space is the tier colour at full strength,
+  free space a pale tint (`RenderIcon`, `UsedPixels`). The old dark wedge wiped
+  the colour out at high fill, which is why a near-full drive was the least
+  legible state — covered by `IconKeepsTierColourWhenNearlyFull`
 
 ### Constraints to respect while working here
 
@@ -161,7 +165,7 @@ format. Low value while there are only two call sites.
 
 ### [ ] 10. `Divergent Change` — one file is now config, tier domain, P/Invoke, model, GDI drawing, toasts and scheduling
 
-**Where** all 495 lines of `TrayDiskWatch.cs`
+**Where** all 536 lines of `TrayDiskWatch.cs`
 
 Still suppressed by the documented "single-file" rule, which is why the refactor
 stopped at data, not files. If it keeps growing, the honest move is to split into
@@ -227,8 +231,9 @@ invites an accidental `git add`.
   `drv.LastRedAlert` surviving across refreshes. Only the *wording* decision is
   tested (`AlertTierAfterTransition`), not the timing. Testable by extracting a
   pure `ShouldAlert(previousTier, newTier, lastRedAlert, nowSeconds)`.
-- [ ] **`UpdateIcon` rendering** — colour choice and pie geometry; only
-  `UsedFraction` is tested. Testable as a pure `WedgeAngleDegrees(freePct)`.
+- [x] **`RenderIcon` rendering** — covered by `UsedPixelsTracksFill` (band
+  height), `IconKeepsTierColourWhenNearlyFull` (the tier colour survives at every
+  fill, the regression it was written for) and `IconBlinkFrameIsGrey`.
 - [ ] **Drive enumeration and whitelist filtering** (`:253-276`) — needs a seam
   taking `DriveInfo[]`.
 - [ ] **`RegisterAumid`, the single-instance mutex, the context menu** — integration
@@ -251,7 +256,7 @@ changes needed, and none should be made just for tests.
 
 | Behaviour | Why it is intentional |
 |---|---|
-| Wedge skipped below 2% used (`WedgeMinimumFraction`, `:405`) | A 0.5% wedge is a hairline artefact, not information. Characterised by a test so a change is a decision, not an accident. |
+| Filled band skipped below 2% used (`BandMinimumFraction`) | A 0.5% band is a hairline artefact, not information. Characterised by `UsedPixelsTracksFill` so a change is a decision, not an accident. |
 | Tooltip degrades percent → decimal → drives (`:453-477`) | The 63-char `NotifyIcon` cap is real. Dropping whole drives silently (the old `Substring`) was the bug; showing fewer digits is not. |
 | `HysteresisGB = 0.5` holds a tier change until the margin clears | Prevents flap/re-alert storms near a boundary. Direction-specific (improvement vs deterioration) and both directions are tested. |
 | Alert wording takes the worse of old and new tier | Guarantees a drop into red always says CRITICAL, including a two-tier jump and the first look. |
